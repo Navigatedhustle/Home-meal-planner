@@ -373,8 +373,8 @@ HTML = r"""
       <div class="pill">Macros/day: {{ result.p_g }}P / {{ result.c_g }}C / {{ result.f_g }}F (g)</div>
     </div>
 
-    {% for day_idx, day in enumerate(result.plan, start=1) %}
-      <h3 style="margin-bottom:8px">Day {{ day_idx }} <span class="muted">(~{{ result.day_totals[day_idx-1] }} kcal)</span></h3>
+    {% for day in result.plan %}
+      <h3 style="margin-bottom:8px">Day {{ loop.index }} <span class="muted">(~{{ result.day_totals[loop.index0] }} kcal)</span></h3>
       <div>
         {% for meal in day %}
           <div class="meal">
@@ -382,6 +382,8 @@ HTML = r"""
             <div class="muted">{{ meal.meal_type.title() }} • {{ meal.K }} kcal • {{ meal.P }}P / {{ meal.C }}C / {{ meal.F }}F</div>
           </div>
         {% endfor %}
+      </div>
+    {% endfor %}
       </div>
     {% endfor %}
 
@@ -769,6 +771,15 @@ class AppTests(unittest.TestCase):
         self.assertEqual(plan['days'], 2)
         self.assertGreater(plan['tdee'], 0)
 
+
+    def test_day_headings_render(self):
+        # Ensure day headings render using Jinja loop.index (no Python enumerate dependency)
+        r = self.client.post('/generate', data={
+            'tdee': '2000', 'days': '2', 'meals_per_day': '3', 'activity': 'light'
+        })
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(b'Day 1', r.data)
+        self.assertIn(b'Day 2', r.data)
 
 # -----------------------------
 # Entrypoint without sys.exit
