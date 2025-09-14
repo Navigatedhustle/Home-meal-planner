@@ -384,8 +384,6 @@ HTML = r"""
         {% endfor %}
       </div>
     {% endfor %}
-      </div>
-    {% endfor %}
 
     <h3>Grocery List</h3>
     <div class="grid grid-2">
