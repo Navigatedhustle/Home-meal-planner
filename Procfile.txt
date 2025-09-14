@@ -1,0 +1,1 @@
+web: gunicorn home_meal_planner_app:app
