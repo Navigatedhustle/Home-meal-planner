@@ -293,12 +293,6 @@ HTML = r"""
             {% for m in [2,3,4,5] %}<option value="{{m}}" {% if m==3 %}selected{% endif %}>{{m}}</option>{% endfor %}
           </select>
         </div>
-        <div>
-          <label>Activity</label>
-          <select name="activity">
-            {% for k,v in activities.items() %}<option value="{{k}}">{{k.title()}}</option>{% endfor %}
-          </select>
-        </div>
       </div>
 
       <h3>Or compute from stats</h3>
@@ -315,14 +309,26 @@ HTML = r"""
           <input name="age" type="number" step="1" placeholder="27">
         </div>
         <div>
-          <label>Height (cm)</label>
-          <input name="height_cm" type="number" step="1" placeholder="170">
+          <label>Height</label>
+          <div class="flex">
+            <input name="height_ft" type="number" step="1" placeholder="ft" style="max-width:90px"> 
+            <input name="height_in" type="number" step="1" placeholder="in" style="max-width:90px">
+          </div>
+          <div class="muted" style="font-size:12px;margin-top:4px">We’ll convert feet+inches to centimeters automatically.</div>
         </div>
         <div>
-          <label>Weight (kg)</label>
-          <input name="weight_kg" type="number" step="0.1" placeholder="88.5">
+          <label>Weight</label>
+          <input name="weight_lb" type="number" step="0.1" placeholder="lb">
+          <div class="muted" style="font-size:12px;margin-top:4px">We’ll convert pounds to kilograms automatically.</div>
+        </div>
+        <div>
+          <label>Activity</label>
+          <select name="activity">
+            {% for k,v in activities.items() %}<option value="{{k}}">{{k.title()}}</option>{% endfor %}
+          </select>
         </div>
       </div>
+      <div class="muted" style="font-size:12px;margin-top:-8px">Prefer metric? You can still use the old fields: height_cm / weight_kg.</div>
 
       <h3>Preferences</h3>
       <div class="grid grid-2">
@@ -338,7 +344,7 @@ HTML = r"""
         <button class="btn" type="submit">Generate Plan</button>
         <a class="btn secondary" href="{{ url_for('index') }}">Reset</a>
       </div>
-      <p class="muted" style="margin-top:12px">Tip: Leave TDEE blank and fill stats to auto-calculate using Mifflin-St Jeor, then we apply your activity factor.</p>
+      <p class="muted" style="margin-top:12px">Tip: Leave TDEE blank and fill stats (ft/in + lb or metric) to auto-calculate using Mifflin-St Jeor, then we apply your activity factor.</p>
     </form>
 
     <div class="card">
@@ -434,13 +440,38 @@ def generate():
             tdee = 0
     else:
         sex = form.get('sex','male')
+        # Try imperial inputs first (feet/inches & pounds). Fallback to metric fields if missing.
+        def _to_float(val, default=None):
+            try:
+                return float(val)
+            except Exception:
+                return default
         try:
             age = int(form.get('age','30'))
-            height_cm = float(form.get('height_cm','175'))
-            weight_kg = float(form.get('weight_kg','80'))
         except Exception:
-            age, height_cm, weight_kg = 30, 175.0, 80.0
-        bmr = mifflin_st_jeor(sex, age, height_cm, weight_kg)
+            age = 30
+        # Height
+        ft_raw = form.get('height_ft', '').strip()
+        in_raw = form.get('height_in', '').strip()
+        lb_raw = form.get('weight_lb', '').strip()
+        height_cm = None
+        weight_kg = None
+        ft = _to_float(ft_raw, None)
+        inches = _to_float(in_raw, None)
+        if ft is not None or inches is not None:
+            ft = ft or 0.0
+            inches = inches or 0.0
+            height_cm = (ft * 12.0 + inches) * 2.54
+        # Weight
+        lb = _to_float(lb_raw, None)
+        if lb is not None:
+            weight_kg = lb * 0.45359237
+        # Fallback to metric fields if needed
+        if height_cm is None:
+            height_cm = _to_float(form.get('height_cm','175'), 175.0)
+        if weight_kg is None:
+            weight_kg = _to_float(form.get('weight_kg','80'), 80.0)
+        bmr = mifflin_st_jeor(sex, age, float(height_cm), float(weight_kg))
         tdee = int(round(compute_tdee(bmr, activity)))
 
     days = max(1, min(7, int(form.get('days','3'))))
@@ -550,7 +581,20 @@ def build_plan_from_params(tdee: Optional[int], days: int, meals_per_day: int, a
         if stats is None:
             # default stats if nothing provided
             stats = {"sex":"male","age":30,"height_cm":175.0,"weight_kg":80.0}
-        bmr = mifflin_st_jeor(stats.get('sex','male'), int(stats.get('age',30)), float(stats.get('height_cm',175.0)), float(stats.get('weight_kg',80.0)))
+        # Support either metric or imperial in stats: height_ft/height_in, weight_lb
+        height_cm = stats.get('height_cm')
+        weight_kg = stats.get('weight_kg')
+        if height_cm is None and (stats.get('height_ft') is not None or stats.get('height_in') is not None):
+            ft = float(stats.get('height_ft') or 0)
+            inch = float(stats.get('height_in') or 0)
+            height_cm = (ft*12 + inch) * 2.54
+        if weight_kg is None and stats.get('weight_lb') is not None:
+            weight_kg = float(stats.get('weight_lb')) * 0.45359237
+        if height_cm is None:
+            height_cm = 175.0
+        if weight_kg is None:
+            weight_kg = 80.0
+        bmr = mifflin_st_jeor(stats.get('sex','male'), int(stats.get('age',30)), float(height_cm), float(weight_kg))
         tdee = int(round(compute_tdee(bmr, activity)))
     target_kcal = int(round(tdee * 0.75))
     p_g, c_g, f_g = grams_from_kcal(target_kcal)
@@ -674,6 +718,14 @@ class AppTests(unittest.TestCase):
         r = self.client.post('/generate', data={
             'sex': 'male', 'age': '28', 'height_cm': '170', 'weight_kg': '90',
             'activity': 'moderate', 'days': '2', 'meals_per_day': '4'
+        })
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(b'TDEE:', r.data)
+
+    def test_generate_from_imperial_stats(self):
+        r = self.client.post('/generate', data={
+            'sex': 'female', 'age': '30', 'height_ft': '5', 'height_in': '6', 'weight_lb': '165',
+            'activity': 'light', 'days': '2', 'meals_per_day': '3'
         })
         self.assertEqual(r.status_code, 200)
         self.assertIn(b'TDEE:', r.data)
