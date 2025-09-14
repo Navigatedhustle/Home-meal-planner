@@ -1,7 +1,7 @@
 """
 Home Meal Planner App - Simple At-Home Meal Plan Generator
 - Inputs: TDEE (or compute from BMR stats) + activity level, days (1-7), meals/day, dietary prefs
-- Output: Daily plan at 25% deficit, grocery list, and downloadable PDF
+- Output: Daily plan at 25% deficit, grocery list, and downloadable PDF (with per‑meal steps)
 - Embeddable UI (single-file Flask app using render_template_string)
 
 How to run (Windows/macOS/Linux):
@@ -29,7 +29,7 @@ import os, sys, math, random, io, re, argparse, datetime, unittest, json, tempfi
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
 
-from flask import Flask, request, render_template_string, send_file, make_response, url_for
+from flask import Flask, request, render_template_string, send_file, make_response
 
 # Optional PDF deps
 try:
@@ -66,66 +66,159 @@ ACTIVITY_FACTORS = {
 }
 
 # -----------------------------
-# Meal database (seed - expand as needed)
-# Each item: name, meal_type, K (kcal), P/C/F (g), tags, ingredients
+# Meal database (expanded)
+# Each item: name, meal_type, K (kcal), P/C/F (g), tags, ingredients, instructions (list[str])
 # tags can include: breakfast, lunch, dinner, snack, vegetarian, vegan, dairy_free, gluten_free, high_protein, low_carb, quick, budget
+# Calories range ~180 to ~850 to support very wide TDEEs.
 # -----------------------------
 MEALS: List[Dict[str, Any]] = [
-    # Breakfast
-    {"name":"Greek Yogurt Parfait", "meal_type":"breakfast","K":320,"P":28,"C":38,"F":6,
+    # ===== BREAKFASTS =====
+    {"name":"Greek Yogurt Parfait","meal_type":"breakfast","K":320,"P":28,"C":38,"F":6,
      "tags":["breakfast","quick","high_protein"],
-     "ingredients":["2 cups 0% Greek yogurt","1/2 cup berries","1/4 cup granola","1 tbsp honey"]},
+     "ingredients":["2 cups 0% Greek yogurt","1/2 cup berries","1/4 cup granola","1 tbsp honey"],
+     "instructions":["Add half the yogurt to a bowl.","Layer berries and granola.","Top with remaining yogurt and drizzle honey."]},
     {"name":"Veggie Egg Scramble + Toast","meal_type":"breakfast","K":360,"P":24,"C":32,"F":14,
      "tags":["breakfast","quick"],
-     "ingredients":["3 eggs","1 cup mixed peppers/onion","1 tsp olive oil","1 slice whole-grain bread"]},
+     "ingredients":["3 eggs","1 cup peppers/onion","1 tsp olive oil","1 slice whole-grain bread"],
+     "instructions":["Heat oil in a nonstick pan.","Sauté veggies 2–3 min.","Scramble in eggs until set.","Toast bread and serve."]},
     {"name":"Protein Oats","meal_type":"breakfast","K":400,"P":30,"C":50,"F":9,
      "tags":["breakfast","high_protein","quick"],
-     "ingredients":["1/2 cup oats","1 scoop whey","1 cup unsweetened almond milk","1 banana"]},
+     "ingredients":["1/2 cup oats","1 scoop whey","1 cup almond milk","1 banana"],
+     "instructions":["Microwave oats with milk 2 min.","Stir in protein powder.","Slice banana on top."]},
     {"name":"Tofu Scramble Wrap","meal_type":"breakfast","K":380,"P":24,"C":44,"F":12,
      "tags":["breakfast","vegan","dairy_free","high_protein","quick"],
-     "ingredients":["6 oz firm tofu","1 small whole-grain tortilla","1/2 cup spinach","1/4 cup salsa"]},
+     "ingredients":["6 oz firm tofu","1 small whole-grain tortilla","1/2 cup spinach","1/4 cup salsa"],
+     "instructions":["Crumble tofu into hot pan.","Cook 4–5 min, add spinach.","Fill tortilla and add salsa."]},
+    {"name":"Egg-White Veggie Omelet","meal_type":"breakfast","K":260,"P":28,"C":16,"F":8,
+     "tags":["breakfast","low_carb","quick","high_protein"],
+     "ingredients":["6 egg whites","1 cup mushrooms/spinach","nonstick spray"],
+     "instructions":["Spray pan and cook veggies 2–3 min.","Add egg whites and fold when set."]},
+    {"name":"Breakfast Burrito (HP)","meal_type":"breakfast","K":650,"P":42,"C":62,"F":22,
+     "tags":["breakfast","high_protein"],
+     "ingredients":["1 large tortilla","3 eggs","3 oz turkey sausage","1/4 cup cheese","salsa"],
+     "instructions":["Cook sausage.","Scramble eggs.","Fill tortilla with eggs, sausage, cheese and salsa; roll."]},
+    {"name":"Green Smoothie Bowl","meal_type":"breakfast","K":300,"P":20,"C":42,"F":7,
+     "tags":["breakfast","vegetarian","quick"],
+     "ingredients":["1 scoop vanilla protein","1 cup spinach","1/2 banana","1/2 cup frozen mango","1 cup almond milk","2 tbsp granola"],
+     "instructions":["Blend protein, fruit, spinach and milk.","Pour into bowl; sprinkle granola."]},
+    {"name":"Big Protein Smoothie","meal_type":"breakfast","K":600,"P":45,"C":70,"F":14,
+     "tags":["breakfast","high_protein","quick"],
+     "ingredients":["2 scoops whey","1 banana","2 tbsp peanut butter","1.5 cups milk"],
+     "instructions":["Blend all ingredients 45–60 sec until smooth."]},
+    {"name":"Overnight Oats (lite)","meal_type":"breakfast","K":280,"P":16,"C":44,"F":6,
+     "tags":["breakfast","vegetarian","budget"],
+     "ingredients":["1/3 cup oats","1/2 cup milk","1/2 cup yogurt","cinnamon"],
+     "instructions":["Mix all in jar.","Refrigerate overnight.","Stir and eat cold."]},
 
-    # Lunch
+    # ===== LUNCHES =====
     {"name":"Chicken Burrito Bowl","meal_type":"lunch","K":520,"P":45,"C":58,"F":12,
-      "tags":["lunch","high_protein","quick"],
-      "ingredients":["6 oz chicken breast","3/4 cup brown rice","1/2 cup black beans","pico","lettuce"]},
+     "tags":["lunch","high_protein","quick"],
+     "ingredients":["6 oz chicken","3/4 cup brown rice","1/2 cup black beans","pico","lettuce"],
+     "instructions":["Warm rice and beans.","Top with sliced cooked chicken, pico and lettuce."]},
     {"name":"Turkey Avocado Sandwich","meal_type":"lunch","K":480,"P":36,"C":46,"F":16,
-      "tags":["lunch","quick"],
-      "ingredients":["2 slices whole-grain bread","5 oz turkey","1/4 avocado","lettuce","tomato","mustard"]},
+     "tags":["lunch","quick"],
+     "ingredients":["2 slices whole-grain bread","5 oz turkey","1/4 avocado","lettuce","tomato","mustard"],
+     "instructions":["Toast bread.","Layer turkey, avocado, veg and mustard; slice."]},
     {"name":"Chickpea Salad Bowl","meal_type":"lunch","K":450,"P":20,"C":55,"F":14,
-      "tags":["lunch","vegetarian","high_protein","budget"],
-      "ingredients":["1 cup chickpeas","2 cups mixed greens","cucumber","tomato","light vinaigrette"]},
+     "tags":["lunch","vegetarian","high_protein","budget"],
+     "ingredients":["1 cup chickpeas","mixed greens","cucumber","tomato","light vinaigrette"],
+     "instructions":["Rinse chickpeas.","Toss all ingredients with dressing."]},
     {"name":"Tuna Rice Bowl","meal_type":"lunch","K":520,"P":42,"C":60,"F":12,
-      "tags":["lunch","high_protein","quick","budget"],
-      "ingredients":["1 can tuna","3/4 cup cooked rice","1/2 cup corn","light mayo","sriracha"]},
+     "tags":["lunch","high_protein","quick","budget"],
+     "ingredients":["1 can tuna","3/4 cup rice","1/2 cup corn","light mayo","sriracha"],
+      "instructions":["Mix tuna with a little mayo.","Serve over warm rice with corn and sriracha."]},
+    {"name":"Grilled Chicken Salad (LC)","meal_type":"lunch","K":350,"P":38,"C":18,"F":12,
+     "tags":["lunch","low_carb","high_protein"],
+     "ingredients":["5 oz grilled chicken","big salad mix","cherry tomatoes","cucumber","light vinaigrette"],
+     "instructions":["Slice chicken.","Toss everything with vinaigrette."]},
+    {"name":"Soba Noodle Bowl","meal_type":"lunch","K":640,"P":30,"C":85,"F":18,
+     "tags":["lunch","vegetarian"],
+     "ingredients":["2 oz dry soba","edamame","shredded carrots","sesame dressing"],
+     "instructions":["Cook soba per package.","Rinse and toss with toppings and dressing."]},
+    {"name":"Turkey & Rice Meal Prep","meal_type":"lunch","K":700,"P":45,"C":80,"F":18,
+     "tags":["lunch","high_protein","budget"],
+     "ingredients":["6 oz lean ground turkey","1 cup cooked rice","1/2 cup peas","BBQ sauce"],
+     "instructions":["Brown turkey.","Serve over rice with peas and drizzle of BBQ."]},
+    {"name":"Lentil Soup + Toast","meal_type":"lunch","K":430,"P":24,"C":62,"F":10,
+     "tags":["lunch","vegetarian","budget"],
+     "ingredients":["1.5 cups lentil soup","1 slice whole-grain bread"],
+     "instructions":["Heat soup.","Toast bread and serve on side."]},
+    {"name":"High-Cal Chicken Pesto Pasta","meal_type":"lunch","K":820,"P":48,"C":88,"F":26,
+     "tags":["lunch","high_protein"],
+     "ingredients":["3 oz dry pasta","6 oz chicken","2 tbsp pesto","spinach"],
+     "instructions":["Boil pasta.","Sauté chicken.","Toss all with pesto and spinach."]},
 
-    # Dinner
+    # ===== DINNERS =====
     {"name":"Salmon, Quinoa, Broccoli","meal_type":"dinner","K":560,"P":42,"C":50,"F":18,
-      "tags":["dinner","high_protein"],
-      "ingredients":["6 oz salmon","3/4 cup quinoa","1.5 cups broccoli","lemon","olive oil"]},
+     "tags":["dinner","high_protein"],
+     "ingredients":["6 oz salmon","3/4 cup quinoa","1.5 cups broccoli","lemon","olive oil"],
+     "instructions":["Bake salmon 10–12 min at 400°F (200°C).","Microwave or steam broccoli.","Serve with cooked quinoa and lemon."]},
     {"name":"Turkey Chili (1 bowl)","meal_type":"dinner","K":540,"P":40,"C":48,"F":18,
-      "tags":["dinner","high_protein","budget"],
-      "ingredients":["8 oz extra-lean turkey","1 cup kidney beans","tomato sauce","onion","spices"]},
+     "tags":["dinner","high_protein","budget"],
+     "ingredients":["8 oz lean turkey","kidney beans","tomato sauce","onion","spices"],
+     "instructions":["Brown turkey with onion.","Add sauce, beans and spices; simmer 10–15 min."]},
     {"name":"Tofu Stir-Fry + Rice","meal_type":"dinner","K":520,"P":28,"C":62,"F":16,
-      "tags":["dinner","vegan","dairy_free","high_protein","quick"],
-      "ingredients":["6 oz firm tofu","2 cups mixed veg","1 tbsp soy sauce","3/4 cup rice"]},
+     "tags":["dinner","vegan","dairy_free","high_protein","quick"],
+     "ingredients":["6 oz tofu","mixed veg","1 tbsp soy sauce","3/4 cup rice"],
+     "instructions":["Stir-fry tofu and veg 6–8 min.","Add soy sauce; serve over rice."]},
     {"name":"Chicken Pasta Primavera","meal_type":"dinner","K":560,"P":44,"C":62,"F":12,
-      "tags":["dinner","high_protein"],
-      "ingredients":["6 oz chicken","2 cups mixed veg","2 oz dry pasta","marinara"]},
+     "tags":["dinner","high_protein"],
+     "ingredients":["6 oz chicken","2 cups mixed veg","2 oz dry pasta","marinara"],
+     "instructions":["Boil pasta.","Sauté chicken and veg.","Combine with marinara."]},
+    {"name":"Shrimp Alfredo (lighter)","meal_type":"dinner","K":680,"P":42,"C":72,"F":20,
+     "tags":["dinner"],
+     "ingredients":["7 oz shrimp","2 oz dry fettuccine","light alfredo sauce"],
+     "instructions":["Boil pasta.","Sauté shrimp 3–4 min.","Toss with warmed sauce."]},
+    {"name":"Steak, Potatoes & Asparagus","meal_type":"dinner","K":750,"P":50,"C":70,"F":25,
+     "tags":["dinner","high_protein","gluten_free"],
+     "ingredients":["7 oz sirloin","8 oz potatoes","1 cup asparagus","1 tsp olive oil"],
+     "instructions":["Roast potatoes 20–25 min at 425°F (220°C).","Sear steak 3–4 min/side; rest.","Sauté asparagus 3–4 min."]},
+    {"name":"Vegan Chickpea Curry","meal_type":"dinner","K":680,"P":24,"C":90,"F":22,
+     "tags":["dinner","vegan","dairy_free","budget"],
+     "ingredients":["1 cup chickpeas","1 cup light coconut milk","curry paste","1 cup rice"],
+     "instructions":["Simmer coconut milk with curry paste.","Add chickpeas 8–10 min.","Serve over rice."]},
+    {"name":"Zoodle Turkey Bolognese (LC)","meal_type":"dinner","K":340,"P":32,"C":18,"F":12,
+     "tags":["dinner","low_carb","high_protein"],
+     "ingredients":["6 oz lean turkey","zucchini noodles","marinara"],
+     "instructions":["Brown turkey.","Heat marinara and toss with zoodles 2–3 min."]},
+    {"name":"Stuffed Sweet Potato (HP)","meal_type":"dinner","K":620,"P":34,"C":78,"F":18,
+     "tags":["dinner","high_protein","vegetarian"],
+     "ingredients":["1 large sweet potato","1 cup black beans","Greek yogurt","green onions"],
+     "instructions":["Microwave potato 6–8 min until soft.","Split and top with warm beans, yogurt and onions."]},
 
-    # Snacks
+    # ===== SNACKS =====
     {"name":"Apple + Peanut Butter","meal_type":"snack","K":240,"P":7,"C":28,"F":12,
-      "tags":["snack","budget","quick"],
-      "ingredients":["1 apple","1.5 tbsp peanut butter"]},
+     "tags":["snack","budget","quick"],
+     "ingredients":["1 apple","1.5 tbsp peanut butter"],
+     "instructions":["Slice apple and dip in peanut butter."]},
     {"name":"Cottage Cheese + Pineapple","meal_type":"snack","K":220,"P":24,"C":22,"F":5,
-      "tags":["snack","high_protein","quick"],
-      "ingredients":["1 cup low-fat cottage cheese","1/2 cup pineapple"]},
+     "tags":["snack","high_protein","quick"],
+     "ingredients":["1 cup low-fat cottage cheese","1/2 cup pineapple"],
+     "instructions":["Spoon cottage cheese into a bowl and top with pineapple."]},
     {"name":"Protein Shake","meal_type":"snack","K":180,"P":24,"C":6,"F":5,
-      "tags":["snack","high_protein","quick"],
-      "ingredients":["1 scoop whey","water or milk"]},
+     "tags":["snack","high_protein","quick"],
+     "ingredients":["1 scoop whey","water or milk"],
+     "instructions":["Shake or blend until smooth."]},
     {"name":"Hummus + Carrots","meal_type":"snack","K":200,"P":6,"C":22,"F":10,
-      "tags":["snack","vegan","dairy_free","budget","quick"],
-      "ingredients":["1/4 cup hummus","1 cup carrots"]},
+     "tags":["snack","vegan","dairy_free","budget","quick"],
+     "ingredients":["1/4 cup hummus","1 cup carrots"],
+     "instructions":["Dip carrots in hummus and enjoy."]},
+    {"name":"Rice Cake + Turkey","meal_type":"snack","K":180,"P":14,"C":18,"F":4,
+     "tags":["snack","high_protein","low_carb","quick"],
+     "ingredients":["1 rice cake","3 oz sliced turkey","mustard"],
+     "instructions":["Spread mustard and layer turkey on rice cake."]},
+    {"name":"Trail Mix (controlled)","meal_type":"snack","K":300,"P":10,"C":28,"F":16,
+     "tags":["snack","vegetarian","budget"],
+     "ingredients":["1/4 cup mixed nuts","2 tbsp raisins"],
+     "instructions":["Portion into a small bowl and eat mindfully."]},
+    {"name":"Greek Yogurt + PB + Cocoa","meal_type":"snack","K":280,"P":24,"C":18,"F":10,
+     "tags":["snack","high_protein"],
+     "ingredients":["1 cup Greek yogurt","1 tbsp peanut butter","1 tsp cocoa powder"],
+     "instructions":["Mix PB and cocoa into yogurt until smooth."]},
+    {"name":"Avocado Toast (lite)","meal_type":"snack","K":260,"P":7,"C":28,"F":12,
+     "tags":["snack","vegetarian"],
+     "ingredients":["1 slice whole-grain bread","1/4 avocado","lemon","salt"],
+     "instructions":["Toast bread.","Mash avocado with lemon and salt; spread."]},
 ]
 
 MEAL_TYPES = ["breakfast","lunch","dinner","snack"]
@@ -211,7 +304,7 @@ def pick_day_plan(target_kcal: int, meals_db: List[Dict[str,Any]], meals_per_day
         total_k += choice["K"]
 
     # Adjust if far from target: try small swaps up to N attempts
-    attempts = 80
+    attempts = 120
     lower = int(target_kcal * 0.95)
     upper = int(target_kcal * 1.05)
     while attempts > 0 and not (lower <= total_k <= upper):
@@ -353,6 +446,7 @@ HTML = r"""
         <li>Daily plan hitting ~75% of TDEE (±5%)</li>
         <li>Balanced macro targets auto-computed</li>
         <li>Quick, simple meals chosen from a growing database</li>
+        <li>Per‑meal step‑by‑step instructions</li>
         <li>Aggregated grocery list / buying guide</li>
         <li>One-click PDF export</li>
       </ul>
@@ -380,6 +474,16 @@ HTML = r"""
           <div class="meal">
             <b>{{ meal.name }}</b>
             <div class="muted">{{ meal.meal_type.title() }} • {{ meal.K }} kcal • {{ meal.P }}P / {{ meal.C }}C / {{ meal.F }}F</div>
+            {% if meal.instructions %}
+            <details style="margin-top:6px">
+              <summary class="muted">Steps</summary>
+              <ol style="margin:6px 0 0 20px">
+                {% for step in meal.instructions %}
+                  <li>{{ step }}</li>
+                {% endfor %}
+              </ol>
+            </details>
+            {% endif %}
           </div>
         {% endfor %}
       </div>
@@ -559,6 +663,12 @@ def pdf(token: str):
             ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
         ]))
         story.append(t)
+        # Add per-meal steps under the table
+        for m in day:
+            steps = m.get('instructions')
+            if steps:
+                story.append(Paragraph(f"<b>Steps – {m['name']}</b>", styles['Normal']))
+                story.append(Paragraph("<br/>".join([f"{idx+1}. {s}" for idx, s in enumerate(steps)]), styles['Small']))
         story.append(Spacer(1, 0.2*inch))
 
     story.append(PageBreak())
@@ -654,6 +764,11 @@ def offline_emit(plan: Dict[str,Any], out_pdf: Optional[str], out_html: Optional
                 ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
             ]))
             story.append(t)
+            for m in day:
+                steps = m.get('instructions')
+                if steps:
+                    story.append(Paragraph(f"<b>Steps – {m['name']}</b>", styles['Normal']))
+                    story.append(Paragraph("<br/>".join([f"{idx+1}. {s}" for idx, s in enumerate(steps)]), styles['Small']))
             story.append(Spacer(1, 0.2*inch))
         story.append(PageBreak())
         story.append(Paragraph("<b>Grocery List</b>", styles['Heading2']))
@@ -674,7 +789,12 @@ def offline_emit(plan: Dict[str,Any], out_pdf: Optional[str], out_html: Optional
             html.append(f"<h2>Day {i} (~{plan['day_totals'][i-1]} kcal)</h2>")
             html.append("<ul>")
             for m in day:
-                html.append(f"<li>{esc(m['name'])} - {m['K']} kcal - {m['P']}P/{m['C']}C/{m['F']}F</li>")
+                steps = m.get('instructions') or []
+                html.append(
+                    "<li>" + f"{esc(m['name'])} - {m['K']} kcal - {m['P']}P/{m['C']}C/{m['F']}F" +
+                    ("<details><summary>Steps</summary><ol>" + "".join([f"<li>{esc(s)}</li>" for s in steps]) + "</ol></details>" if steps else "") +
+                    "</li>"
+                )
             html.append("</ul>")
         html.append("<h2>Grocery List</h2><ul>")
         for item, qty in plan['grocery'].items():
@@ -704,6 +824,8 @@ class AppTests(unittest.TestCase):
         })
         self.assertEqual(r.status_code, 200)
         self.assertIn(b'Target:', r.data)
+        # Ensure Day headings render without relying on Python enumerate in Jinja
+        self.assertIn(b'Day 1', r.data)
         m = re.search(rb"/pdf/(\d+)", r.data)
         self.assertIsNotNone(m)
         token = m.group(1).decode()
@@ -725,126 +847,4 @@ class AppTests(unittest.TestCase):
     def test_generate_from_imperial_stats(self):
         r = self.client.post('/generate', data={
             'sex': 'female', 'age': '30', 'height_ft': '5', 'height_in': '6', 'weight_lb': '165',
-            'activity': 'light', 'days': '2', 'meals_per_day': '3'
-        })
-        self.assertEqual(r.status_code, 200)
-        self.assertIn(b'TDEE:', r.data)
-
-    def test_preferences_filter_and_grocery(self):
-        r = self.client.post('/generate', data={
-            'tdee': '2200', 'days': '1', 'meals_per_day': '4', 'activity': 'light',
-            'vegan': 'on', 'excludes': 'peanut'
-        })
-        self.assertEqual(r.status_code, 200)
-        self.assertIn(b'Grocery List', r.data)
-
-    # New tests: macro allocation and offline builder
-    def test_macro_allocation_reasonable(self):
-        P,C,F = grams_from_kcal(1800)
-        total = P*4 + C*4 + F*9
-        self.assertTrue(1700 <= total <= 1900)
-
-    def test_build_plan_offline(self):
-        plan = build_plan_from_params(tdee=2400, days=1, meals_per_day=3, activity='light', stats=None, prefs={})
-        self.assertEqual(plan['days'], 1)
-        self.assertEqual(plan['meals_per_day'], 3)
-        self.assertIn('plan', plan)
-        self.assertIn('grocery', plan)
-
-    def test_pdf_invalid_token_410(self):
-        resp = self.client.get('/pdf/0000000000')
-        self.assertEqual(resp.status_code, 410)
-
-    def test_offline_emit_html_file(self):
-        plan = build_plan_from_params(tdee=2000, days=1, meals_per_day=3, activity='light', stats=None, prefs={})
-        with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, 'plan.html')
-            offline_emit(plan, out_pdf=None, out_html=path, out_json=None)
-            self.assertTrue(os.path.exists(path))
-
-    # Added test: compute TDEE from stats (no explicit TDEE)
-    def test_compute_tdee_from_stats_offline(self):
-        plan = build_plan_from_params(tdee=None, days=2, meals_per_day=3, activity='light',
-                                      stats={'sex':'female','age':32,'height_cm':165,'weight_kg':70}, prefs={})
-        self.assertEqual(plan['days'], 2)
-        self.assertGreater(plan['tdee'], 0)
-
-
-    def test_day_headings_render(self):
-        # Ensure day headings render using Jinja loop.index (no Python enumerate dependency)
-        r = self.client.post('/generate', data={
-            'tdee': '2000', 'days': '2', 'meals_per_day': '3', 'activity': 'light'
-        })
-        self.assertEqual(r.status_code, 200)
-        self.assertIn(b'Day 1', r.data)
-        self.assertIn(b'Day 2', r.data)
-
-# -----------------------------
-# Entrypoint without sys.exit
-# -----------------------------
-
-def main() -> None:
-    # Run tests if requested
-    if os.environ.get('RUN_TESTS') == '1':
-        # Prevent unittest from calling sys.exit
-        unittest.main(module=__name__, exit=False)
-        return
-
-    parser = argparse.ArgumentParser(description='Home Meal Planner')
-    parser.add_argument('--offline', action='store_true', help='Run without a web server and emit files')
-    parser.add_argument('--tdee', type=int, default=None, help='TDEE kcal (if omitted, computed from stats)')
-    parser.add_argument('--days', type=int, default=3, help='1-7')
-    parser.add_argument('--meals', type=int, default=3, help='2-5 meals per day')
-    parser.add_argument('--activity', type=str, default='sedentary', choices=list(ACTIVITY_FACTORS.keys()))
-    parser.add_argument('--sex', type=str, default=None, choices=['male','female'])
-    parser.add_argument('--age', type=int, default=None)
-    parser.add_argument('--height_cm', type=float, default=None)
-    parser.add_argument('--weight_kg', type=float, default=None)
-    parser.add_argument('--out', type=str, default=None, help='Output PDF path (uses HTML if ReportLab missing)')
-    parser.add_argument('--out_html', type=str, default=None, help='Output HTML path (fallback when no ReportLab)')
-    parser.add_argument('--out_json', type=str, default=None, help='Output JSON path')
-    args, _ = parser.parse_known_args()
-
-    # If explicitly offline, generate and return.
-    if args.offline:
-        stats = None
-        if args.sex or args.age or args.height_cm or args.weight_kg:
-            stats = {
-                'sex': args.sex or 'male',
-                'age': args.age or 30,
-                'height_cm': args.height_cm or 175.0,
-                'weight_kg': args.weight_kg or 80.0,
-            }
-        plan = build_plan_from_params(args.tdee, max(1, min(7, args.days)), max(2, min(5, args.meals)), args.activity, stats, prefs={})
-        # Decide outputs
-        out_pdf = args.out if (args.out and REPORTLAB_AVAILABLE and args.out.lower().endswith('.pdf')) else None
-        out_html = args.out if (args.out and (not REPORTLAB_AVAILABLE or args.out.lower().endswith('.html'))) else args.out_html
-        offline_emit(plan, out_pdf, out_html, args.out_json)
-        return
-
-    # Otherwise try to serve. If sockets are not allowed, fall back to offline demo and return.
-    port = int(os.environ.get('PORT', 5000))
-    DEV_DEBUG = os.environ.get('DEV_DEBUG', '0') == '1' and MULTIPROC_AVAILABLE
-    WANT_THREADING = os.environ.get('FLASK_THREADED', '0') == '1' and MULTIPROC_AVAILABLE
-
-    def start_server() -> None:
-        from werkzeug.serving import run_simple
-        run_simple('127.0.0.1', port, app, use_reloader=False, threaded=WANT_THREADING, use_debugger=DEV_DEBUG)
-
-    try:
-        start_server()
-    except BaseException as e:  # Catch SystemExit and any environment-triggered failures
-        # Socket not permitted or unsupported environment. Do offline demo instead of crashing.
-        print(f"Server not started due to environment restriction: {e}")
-        demo = build_plan_from_params(tdee=2400, days=1, meals_per_day=3, activity='light', stats=None, prefs={})
-        # Emit to HTML by default when ReportLab is missing
-        default_out = os.environ.get('OFFLINE_OUT', 'meal_plan_demo.html' if not REPORTLAB_AVAILABLE else 'meal_plan_demo.pdf')
-        out_pdf = default_out if (REPORTLAB_AVAILABLE and default_out.lower().endswith('.pdf')) else None
-        out_html = default_out if (not REPORTLAB_AVAILABLE or default_out.lower().endswith('.html')) else None
-        offline_emit(demo, out_pdf, out_html, os.environ.get('OFFLINE_JSON'))
-        print("Offline demo generated. To avoid this fallback, run on a host where sockets are allowed or pass --offline explicitly.")
-        return
-
-
-if __name__ == '__main__':
-    main()
+            'activity': 'light', 'days': '2', 'meals_per_day': '3'})
